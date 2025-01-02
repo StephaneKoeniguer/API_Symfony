@@ -5,6 +5,7 @@ namespace App\Controller;
 use App\Entity\Book;
 use App\Repository\AuthorRepository;
 use App\Repository\BookRepository;
+use App\Service\VersioningService;
 use Doctrine\ORM\EntityManagerInterface;
 use Psr\Cache\InvalidArgumentException;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
@@ -21,21 +22,50 @@ use Symfony\Component\Serializer\Normalizer\AbstractNormalizer;
 use Symfony\Component\Validator\Validator\ValidatorInterface;
 use Symfony\Contracts\Cache\ItemInterface;
 use Symfony\Contracts\Cache\TagAwareCacheInterface;
+use Nelmio\ApiDocBundle\Annotation\Model;
+use Nelmio\ApiDocBundle\Annotation\Security;
+use OpenApi\Annotations as OA;
 
 class BookController extends AbstractController
 {
     /**
-     * Permet de récupérer tous les livres
+     * Cette méthode permet de récupérer l'ensemble des livres.
+     *
+     * @OA\Response(
+     *      response=200,
+     *      description="Retourne la liste des livres",
+     *      @OA\JsonContent(
+     *         type="array",
+     *         @OA\Items(ref=@Model(type=Book   ::class, groups={"getBooks"}))
+     *      )
+     *  )
+     * @OA\Parameter(
+     *      name="page",
+     *      in="query",
+     *      description="La page que l'on veut récupérer",
+     *      @OA\Schema(type="int")
+     *  )
+     *
+     * @OA\Parameter(
+     *      name="limit",
+     *      in="query",
+     *      description="Le nombre d'éléments que l'on veut récupérer",
+     *      @OA\Schema(type="int")
+     *  )
+     * @OA\Tag(name="Books")
+     *
      * @param BookRepository $bookRepository
      * @param SerializerInterface $serializer
      * @param Request $request
      * @param TagAwareCacheInterface $cache
+     * @param VersioningService $versioningService
      * @return JsonResponse
      * @throws InvalidArgumentException
      */
     #[Route('/api/books', name: 'book', methods: ['GET'])]
     public final function getBookList(BookRepository $bookRepository, SerializerInterface $serializer,
-                                      Request $request, TagAwareCacheInterface $cache): JsonResponse
+                                      Request $request, TagAwareCacheInterface $cache,
+                                      VersioningService $versioningService): JsonResponse
     {
         // Récupération des paramètres de pagination de la requête
         $page = $request->get('page', 1);
@@ -44,12 +74,14 @@ class BookController extends AbstractController
         // Utilisation d'un cache pour stocker les résultats des requêtes sur les livres
         $idCache = "getAllBooks-" . $page . "-" . $limit;
 
-        $jsonBookList = $cache->get($idCache, function (ItemInterface $item) use ($bookRepository, $page, $limit, $serializer) {
+        $jsonBookList = $cache->get($idCache, function (ItemInterface $item) use ($bookRepository, $page, $limit, $serializer, $versioningService) {
             // Permet de taguer le cache avec le nom du groupe des livres pour faciliter la purge des données
             $item->tag("booksCache");
             // Permet de contourner le lazy Loading
             $bookList = $bookRepository->findAllWidthPagination($page, $limit);
+            $version = $versioningService->getVersion();
             $context = SerializationContext::create()->setGroups(['getBooks']);
+            $context->setVersion($version);
             return $serializer->serialize($bookList, 'json', $context);
         });
 
@@ -82,9 +114,11 @@ class BookController extends AbstractController
      * @return JsonResponse
      */
     #[Route('/api/books/{id}', name: 'detailBook', methods: ['GET'])]
-    public final function getDetailBook(Book $book, SerializerInterface $serializer): JsonResponse
+    public final function getDetailBook(Book $book, SerializerInterface $serializer, VersioningService $versioningService): JsonResponse
     {
+        $version = $versioningService->getVersion();
         $context = SerializationContext::create()->setGroups(['getBooks']);
+        $context->setVersion($version);
         $jsonBook = $serializer->serialize($book, 'json', $context);
 
         return new JsonResponse(
